@@ -17,7 +17,7 @@ GEMS.each do |gem_name|
 
   files = {}
   Dir.glob("#{lib_dir}/**/*.rb").sort.each do |path|
-    relative = path.delete_prefix("#{lib_dir}/")
+    relative = path.sub(/\A#{Regexp.escape(lib_dir)}\/?/, "")
     files[relative] = File.read(path)
   end
 
