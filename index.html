@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RBS Inline Playground</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #1e1e2e; color: #cdd6f4; height: 100vh; display: flex; flex-direction: column; }
+    header { padding: 12px 20px; background: #181825; border-bottom: 1px solid #313244; display: flex; align-items: center; gap: 12px; }
+    header h1 { font-size: 18px; font-weight: 600; color: #cba6f7; }
+    header a { color: #89b4fa; font-size: 13px; text-decoration: none; }
+    header a:hover { text-decoration: underline; }
+    #status { margin-left: auto; font-size: 13px; color: #a6e3a1; }
+    #status.loading { color: #f9e2af; }
+    #status.error { color: #f38ba8; }
+    .editor-container { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 0; overflow: hidden; }
+    .panel { display: flex; flex-direction: column; }
+    .panel:first-child { border-right: 1px solid #313244; }
+    .panel-header { padding: 8px 16px; background: #181825; font-size: 12px; font-weight: 600; color: #7f849c; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid #313244; display: flex; align-items: center; gap: 8px; }
+    .panel-header .lang { color: #cba6f7; }
+    textarea { flex: 1; width: 100%; padding: 16px; background: #1e1e2e; color: #cdd6f4; border: none; outline: none; font-family: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace; font-size: 14px; line-height: 1.6; resize: none; }
+    textarea:focus { background: #1e1e2e; }
+    #rbs-output { color: #a6e3a1; background: #181825; }
+    .loading-overlay { position: fixed; inset: 0; background: rgba(30, 30, 46, 0.9); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; z-index: 100; }
+    .loading-overlay.hidden { display: none; }
+    .spinner { width: 40px; height: 40px; border: 3px solid #313244; border-top-color: #cba6f7; border-radius: 50%; animation: spin 0.8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .loading-text { color: #cdd6f4; font-size: 15px; }
+    .loading-progress { color: #7f849c; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <div class="loading-overlay" id="loading">
+    <div class="spinner"></div>
+    <div class="loading-text">Loading RBS Inline Playground...</div>
+    <div class="loading-progress" id="loading-progress">Initializing Ruby WebAssembly</div>
+  </div>
+
+  <header>
+    <h1>RBS Inline Playground</h1>
+    <a href="https://github.com/soutaro/rbs-inline" target="_blank">rbs-inline</a>
+    <a href="https://github.com/ruby/ruby.wasm" target="_blank">ruby.wasm</a>
+    <span id="status" class="loading">Loading...</span>
+  </header>
+
+  <div class="editor-container">
+    <div class="panel">
+      <div class="panel-header"><span class="lang">Ruby</span> — write inline type annotations</div>
+      <textarea id="ruby-input" spellcheck="false"></textarea>
+    </div>
+    <div class="panel">
+      <div class="panel-header"><span class="lang">RBS</span> — generated output</div>
+      <textarea id="rbs-output" readonly spellcheck="false"></textarea>
+    </div>
+  </div>
+
+  <script src="gem_bundle.js"></script>
+  <script type="module">
+    import { DefaultRubyVM } from "https://cdn.jsdelivr.net/npm/@ruby/wasm-wasi@2.9.4/dist/browser/+esm";
+
+    const statusEl = document.getElementById('status');
+    const loadingEl = document.getElementById('loading');
+    const progressEl = document.getElementById('loading-progress');
+    const rubyInput = document.getElementById('ruby-input');
+    const rbsOutput = document.getElementById('rbs-output');
+
+    function setProgress(msg) {
+      progressEl.textContent = msg;
+    }
+
+    function setStatus(msg, cls = '') {
+      statusEl.textContent = msg;
+      statusEl.className = cls;
+    }
+
+    // Location stub - provides the C-extension interface for RBS::Location
+    const LOCATION_STUB = `
+module RBS
+  class Location
+    attr_reader :buffer
+    def initialize(buffer, start_pos, end_pos)
+      @buffer = buffer
+      @_start_pos = start_pos.to_i
+      @_end_pos = end_pos.to_i
+      @req_children = {}
+      @opt_children = {}
+    end
+    def _start_pos; @_start_pos; end
+    def _end_pos; @_end_pos; end
+    def _start_loc; nil; end
+    def _end_loc; nil; end
+    def _add_required_child(name, s, e); @req_children[name] = self.class.new(@buffer, s, e); end
+    def _add_optional_child(name, s, e); @opt_children[name] = self.class.new(@buffer, s, e); end
+    def _add_optional_no_child(name); @opt_children[name] = nil; end
+    def _optional_keys; @opt_children.keys; end
+    def _required_keys; @req_children.keys; end
+    def [](key); @req_children[key] || @opt_children[key]; end
+    alias aref []
+  end
+end
+$LOADED_FEATURES << "rbs_extension"
+`;
+
+    // Pure Ruby RBS type parser - replaces the C extension parser
+    const PURE_PARSER = `
+class RBSTypeParser
+  attr_reader :pos
+  def initialize(src, variables = [])
+    @src = src.to_s; @pos = 0; @variables = variables
+  end
+  def parse_type; skip_ws; parse_union; end
+  def parse_method_type; skip_ws; parse_method_type_impl; end
+  private
+  def ch; @src[@pos]; end
+  def peek(n=1); @src[@pos, n]; end
+  def adv(n=1); @pos += n; end
+  def rem; @src[@pos..]; end
+  def done?; @pos >= @src.length; end
+  def skip_ws; adv while !done? && @src[@pos] =~ /\\s/; end
+  def parse_union
+    ts = [parse_intersection]; skip_ws
+    while ch == "|"; adv; skip_ws; ts << parse_intersection; skip_ws; end
+    ts.size == 1 ? ts[0] : RBS::Types::Union.new(types: ts, location: nil)
+  end
+  def parse_intersection
+    ts = [parse_optional]; skip_ws
+    while ch == "&"; adv; skip_ws; ts << parse_optional; skip_ws; end
+    ts.size == 1 ? ts[0] : RBS::Types::Intersection.new(types: ts, location: nil)
+  end
+  def parse_optional
+    t = parse_primary; skip_ws
+    ch == "?" ? (adv; RBS::Types::Optional.new(type: t, location: nil)) : t
+  end
+  def parse_primary
+    skip_ws
+    return RBS::Types::Bases::Any.new(location: nil) if done?
+    [
+      ["nil", -> { adv(3); RBS::Types::Bases::Nil.new(location: nil) }],
+      ["void", -> { adv(4); RBS::Types::Bases::Void.new(location: nil) }],
+      ["bool", -> { adv(4); RBS::Types::Bases::Bool.new(location: nil) }],
+      ["self", -> { adv(4); RBS::Types::Bases::Self.new(location: nil) }],
+      ["top", -> { adv(3); RBS::Types::Bases::Top.new(location: nil) }],
+      ["bot", -> { adv(3); RBS::Types::Bases::Bottom.new(location: nil) }],
+      ["instance", -> { adv(8); RBS::Types::Bases::Instance.new(location: nil) }],
+      ["class", -> { adv(5); RBS::Types::Bases::Class.new(location: nil) }],
+      ["untyped", -> { adv(7); RBS::Types::Bases::Any.new(location: nil) }],
+    ].each { |kw, fn| return fn.call if rem.start_with?(kw) && (rem[kw.length] || "") !~ /[a-zA-Z0-9_]/ }
+    case ch
+    when "("
+      adv; skip_ws
+      if ch == ")"; adv; return RBS::Types::Tuple.new(types: [], location: nil); end
+      t = parse_union; skip_ws
+      if ch == ","
+        ts = [t]
+        while ch == ","; adv; skip_ws; break if ch == ")"; ts << parse_union; skip_ws; end
+        adv if ch == ")"
+        return RBS::Types::Tuple.new(types: ts, location: nil)
+      end
+      adv if ch == ")"; t
+    when "^"; adv; skip_ws; parse_proc_type
+    when "["
+      adv; skip_ws; t = parse_union; skip_ws; adv if ch == "]"
+      RBS::Types::ClassInstance.new(name: RBS::TypeName.new(name: :Array, namespace: RBS::Namespace.root), args: [t], location: nil)
+    when /[A-Z]/; parse_named_type
+    when ":"
+      adv; sym = ""; sym << ch and adv while !done? && ch =~ /[a-zA-Z0-9_?!]/
+      RBS::Types::Literal.new(literal: sym.to_sym, location: nil)
+    when '"', "'"
+      q = ch; adv; s = ""; s << ch and adv until done? || ch == q; adv
+      RBS::Types::Literal.new(literal: s, location: nil)
+    when /[\\d]/
+      n = ""; n << ch and adv while !done? && ch =~ /[\\d]/
+      RBS::Types::Literal.new(literal: n.to_i, location: nil)
+    else
+      adv; RBS::Types::Bases::Any.new(location: nil)
+    end
+  end
+  def parse_named_type
+    parts = []; name = ""
+    name << ch and adv while !done? && ch =~ /[a-zA-Z0-9_]/
+    while peek(2) == "::"
+      adv(2); parts << name; name = ""
+      name << ch and adv while !done? && ch =~ /[a-zA-Z0-9_]/
+    end
+    ns = parts.empty? ? RBS::Namespace.root : RBS::Namespace.new(path: parts.map(&:to_sym), absolute: false)
+    tn = RBS::TypeName.new(name: name.to_sym, namespace: ns)
+    skip_ws
+    args = []
+    if ch == "["
+      adv; skip_ws
+      until done? || ch == "]"
+        args << parse_union; skip_ws; adv if ch == ","; skip_ws
+      end
+      adv if ch == "]"
+    end
+    RBS::Types::ClassInstance.new(name: tn, args: args, location: nil)
+  end
+  def parse_proc_type
+    ps = ch == "(" ? (adv; p = parse_params; adv if ch == ")"; p) : empty_params; skip_ws
+    rt = rem.start_with?("->") ? (adv(2); skip_ws; parse_union) : void_type
+    RBS::Types::Proc.new(type: ps.with_return_type(rt), self_type: nil, location: nil)
+  end
+  def parse_params
+    req = []; opt = []; rest = nil; req_kw = {}; opt_kw = {}; rest_kw = nil
+    skip_ws
+    while !done? && ch != ")"
+      prev_pos = @pos
+      t = parse_union; skip_ws
+      param_name = nil
+      if !done? && ch =~ /[a-z_]/
+        pname = ""; pname << ch and adv while !done? && ch =~ /\\w/
+        if ch == ":"
+          adv; req_kw[pname.to_sym] = fn_param(t, pname.to_sym)
+          skip_ws; adv if ch == ","; skip_ws; next
+        else
+          param_name = pname.to_sym
+        end
+      end
+      req << fn_param(t, param_name)
+      skip_ws; adv if ch == ","; skip_ws
+      adv if @pos == prev_pos
+    end
+    RBS::Types::Function.new(required_positionals: req, optional_positionals: opt,
+      rest_positionals: rest, trailing_positionals: [], required_keywords: req_kw,
+      optional_keywords: opt_kw, rest_keywords: rest_kw, return_type: void_type)
+  end
+  def fn_param(type, name = nil); RBS::Types::Function::Param.new(type: type, name: name, location: nil); end
+  def empty_params
+    RBS::Types::Function.new(required_positionals: [], optional_positionals: [], rest_positionals: nil,
+      trailing_positionals: [], required_keywords: {}, optional_keywords: {}, rest_keywords: nil, return_type: void_type)
+  end
+  def void_type; RBS::Types::Bases::Void.new(location: nil); end
+  def parse_method_type_impl
+    tp = []
+    if ch == "["
+      adv; skip_ws
+      until done? || ch == "]"
+        nm = ""; nm << ch and adv while !done? && ch =~ /[A-Za-z_]/; skip_ws
+        tp << RBS::AST::TypeParam.new(name: nm.to_sym, variance: :invariant, unchecked: false, location: nil, default_type: nil)
+        adv if ch == ","; skip_ws
+      end
+      adv if ch == "]"; skip_ws
+    end
+    ps = ch == "(" ? (adv; p = parse_params; adv if ch == ")"; p) : empty_params; skip_ws
+    blk = nil
+    if ch == "{"
+      adv; skip_ws
+      bp = ch == "(" ? (adv; p = parse_params; adv if ch == ")"; p) : empty_params; skip_ws
+      br = rem.start_with?("->") ? (adv(2); skip_ws; parse_union) : void_type
+      skip_ws; adv if ch == "}"; skip_ws
+      blk = RBS::Types::Block.new(type: bp.with_return_type(br), required: true, self_type: nil)
+    end
+    rt = rem.start_with?("->") ? (adv(2); skip_ws; parse_union) : void_type
+    RBS::MethodType.new(type_params: tp, type: ps.with_return_type(rt), block: blk, location: nil)
+  end
+end
+
+module RBS
+  class Parser
+    def self.rbs_buf(source)
+      source.is_a?(RBS::Buffer) ? source : RBS::Buffer.new(name: Pathname.new("-"), content: source.to_s)
+    end
+    def self.parse_type(source, range: nil, byte_range: 0..., variables: [], require_eof: false, **opts)
+      buf = rbs_buf(source)
+      content = buf.content
+      start_pos = byte_range.is_a?(Range) ? (byte_range.begin || 0) : 0
+      slice = byte_range.is_a?(Range) && !byte_range.begin.nil? ? content[byte_range] : content
+      parser = RBSTypeParser.new(slice.to_s.strip, variables)
+      result = parser.parse_type
+      return nil unless result
+      loc = RBS::Location.new(buf, start_pos, start_pos + parser.pos)
+      result.instance_variable_set(:@location, loc)
+      result
+    end
+    def self.parse_method_type(source, range: nil, byte_range: 0..., variables: [], require_eof: false)
+      buf = rbs_buf(source)
+      content = buf.content
+      start_pos = byte_range.is_a?(Range) ? (byte_range.begin || 0) : 0
+      slice = byte_range.is_a?(Range) && !byte_range.begin.nil? ? content[byte_range] : content
+      parser = RBSTypeParser.new(slice.to_s.strip, variables)
+      result = parser.parse_method_type
+      return nil unless result
+      loc = RBS::Location.new(buf, start_pos, start_pos + parser.pos)
+      result.instance_variable_set(:@location, loc)
+      result
+    end
+    def self.parse_signature(source)
+      [rbs_buf(source), [], []]
+    end
+    def self.parse_inline_leading_annotation(*args, **opts); nil; end
+    def self.parse_inline_trailing_annotation(*args, **opts); nil; end
+  end
+end
+`;
+
+    const SAMPLE_RUBY = `# rbs_inline: enabled
+
+class Person
+  attr_reader :name #: String
+  attr_reader :age  #: Integer
+
+  # @rbs name: String
+  # @rbs age: Integer
+  # @rbs return: void
+  def initialize(name, age)
+    @name = name
+    @age = age
+  end
+
+  #: () -> String
+  def greeting
+    "Hello, I'm \#{@name}"
+  end
+
+  # @rbs other: Person
+  # @rbs return: bool
+  def ==(other)
+    name == other.name && age == other.age
+  end
+end
+`;
+
+    async function initRuby() {
+      try {
+        setProgress('Downloading Ruby WebAssembly (~10MB)...');
+        const response = await fetch(
+          'https://cdn.jsdelivr.net/npm/@ruby/head-wasm-wasi@2.9.4/dist/ruby+stdlib.wasm'
+        );
+        const module = await WebAssembly.compileStreaming(response);
+        setProgress('Initializing Ruby VM...');
+        const { vm } = await DefaultRubyVM(module);
+
+        setProgress('Setting up RBS extension stub...');
+        vm.eval(LOCATION_STUB);
+        vm.eval(`require "prism"; require "strscan"; require "set"; require "json"; require "pathname"; require "pp"`);
+
+        setProgress('Loading rbs gem files...');
+        const rbsFiles = GEM_BUNDLE['rbs'];
+        const RBS_LOAD_ORDER = [
+          'rbs/version', 'rbs/errors', 'rbs/buffer', 'rbs/namespace', 'rbs/type_name',
+          'rbs/types', 'rbs/method_type', 'rbs/ast/type_param', 'rbs/ast/directives',
+          'rbs/ast/annotation', 'rbs/ast/comment', 'rbs/ast/declarations',
+          'rbs/ast/members', 'rbs/ast/visitor', 'rbs/writer',
+          'rbs/parser_aux', 'rbs/location_aux'
+        ];
+        for (const f of RBS_LOAD_ORDER) {
+          const content = rbsFiles[`${f}.rb`];
+          if (content) {
+            vm.eval(content);
+            vm.eval(`$LOADED_FEATURES << "${f}" unless $LOADED_FEATURES.include?("${f}")`);
+          }
+        }
+        vm.eval(`$LOADED_FEATURES << "rbs"`);
+
+        setProgress('Installing pure Ruby RBS parser...');
+        vm.eval(PURE_PARSER);
+
+        setProgress('Loading rbs-inline...');
+        const inlineFiles = GEM_BUNDLE['rbs-inline'];
+        const INLINE_LOAD_ORDER = [
+          'rbs/inline/version', 'rbs/inline/node_utils',
+          'rbs/inline/annotation_parser/tokenizer', 'rbs/inline/annotation_parser',
+          'rbs/inline/ast/annotations', 'rbs/inline/ast/comment_lines',
+          'rbs/inline/ast/tree', 'rbs/inline/ast/declarations',
+          'rbs/inline/ast/members', 'rbs/inline/parser', 'rbs/inline/writer'
+        ];
+        for (const f of INLINE_LOAD_ORDER) {
+          const content = inlineFiles[`${f}.rb`];
+          if (content) {
+            vm.eval(content);
+            vm.eval(`$LOADED_FEATURES << "${f}" unless $LOADED_FEATURES.include?("${f}")`);
+          }
+        }
+        vm.eval(`$LOADED_FEATURES << "rbs/inline"`);
+
+        loadingEl.classList.add('hidden');
+        setStatus(`Ready (rbs-inline ${vm.eval('RBS::Inline::VERSION').toString()})`, '');
+
+        rubyInput.value = SAMPLE_RUBY;
+
+        function convert() {
+          try {
+            const src = rubyInput.value;
+            vm.eval(`$__ruby_src = ${JSON.stringify(src)}`);
+            const result = vm.eval(`
+              begin
+                prism_result = Prism.parse($__ruby_src)
+                uses, decls, rbs_decls = RBS::Inline::Parser.parse(prism_result, opt_in: false)
+                buffer = +""
+                writer = RBS::Inline::Writer.new(buffer)
+                writer.write(uses, decls, rbs_decls)
+                buffer.empty? ? "# (no output - add type annotations to your Ruby code)" : buffer
+              rescue => e
+                "# Error: \#{e.class}: \#{e.message}"
+              end
+            `).toString();
+            rbsOutput.value = result;
+          } catch(e) {
+            rbsOutput.value = `# Error: ${e.message}`;
+          }
+        }
+
+        rubyInput.addEventListener('input', convert);
+        convert();
+      } catch(e) {
+        loadingEl.classList.add('hidden');
+        setStatus(`Error: ${e.message}`, 'error');
+        rbsOutput.value = `# Failed to initialize: ${e.message}`;
+      }
+    }
+
+    initRuby();
+  </script>
+</body>
+</html>
