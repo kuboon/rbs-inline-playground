@@ -57,7 +57,7 @@
 
   <script src="gem_bundle.js"></script>
   <script type="module">
-    import { DefaultRubyVM } from "https://cdn.jsdelivr.net/npm/@ruby/wasm-wasi@2.9.4/dist/browser/+esm";
+    import { DefaultRubyVM } from "https://cdn.jsdelivr.net/npm/@ruby/wasm-wasi@2.9.4-2026-05-21-a/dist/browser/+esm";
 
     const statusEl = document.getElementById('status');
     const loadingEl = document.getElementById('loading');
@@ -325,7 +325,7 @@ end
       try {
         setProgress('Downloading Ruby WebAssembly (~10MB)...');
         const response = await fetch(
-          'https://cdn.jsdelivr.net/npm/@ruby/head-wasm-wasi@2.9.4/dist/ruby+stdlib.wasm'
+          'https://cdn.jsdelivr.net/npm/@ruby/head-wasm-wasi@2.9.4-2026-05-21-a/dist/ruby+stdlib.wasm'
         );
         const module = await WebAssembly.compileStreaming(response);
         setProgress('Initializing Ruby VM...');
