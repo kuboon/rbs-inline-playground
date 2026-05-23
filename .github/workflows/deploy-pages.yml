@@ -33,6 +33,9 @@ jobs:
       - name: Build gem bundle
         run: bundle exec ruby build_gem_bundle.rb
 
+      - name: Build ruby.wasm
+        run: bundle exec rbwasm build --ruby-version head --output ruby.wasm --format wasm
+
       - name: Setup Pages
         uses: actions/configure-pages@v5
 
