@@ -1,3 +1,6 @@
 gem_bundle.js
 vendor/bundle
 .bundle
+build
+rubies
+ruby.wasm
