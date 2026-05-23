@@ -352,7 +352,7 @@ end
         ];
         for (const f of RBS_LOAD_ORDER) {
           let content = rbsFiles[`${f}.rb`];
-          if (f === 'rbs/parser_aux') {
+          if (content && f === 'rbs/parser_aux') {
             content = content.replace(parserRequirePattern, '');
           }
           if (content) {
