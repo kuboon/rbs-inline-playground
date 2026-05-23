@@ -337,15 +337,24 @@ end
 
         setProgress('Loading rbs gem files...');
         const rbsFiles = GEM_BUNDLE['rbs'];
+        const RBS_PARSER_REQUIRE_RELATIVES = ['lex_result', 'token'];
+        const parserRequirePattern = new RegExp(
+          `^\\s*require_relative\\s+["']parser\\/(?:${RBS_PARSER_REQUIRE_RELATIVES.join('|')})["'](?:\\s*#.*)?\\s*$`,
+          'gm'
+        );
         const RBS_LOAD_ORDER = [
           'rbs/version', 'rbs/errors', 'rbs/buffer', 'rbs/namespace', 'rbs/type_name',
           'rbs/types', 'rbs/method_type', 'rbs/ast/type_param', 'rbs/ast/directives',
           'rbs/ast/annotation', 'rbs/ast/comment', 'rbs/ast/declarations',
           'rbs/ast/members', 'rbs/ast/visitor', 'rbs/writer',
+          ...RBS_PARSER_REQUIRE_RELATIVES.map(name => `rbs/parser/${name}`),
           'rbs/parser_aux', 'rbs/location_aux'
         ];
         for (const f of RBS_LOAD_ORDER) {
-          const content = rbsFiles[`${f}.rb`];
+          let content = rbsFiles[`${f}.rb`];
+          if (content && f === 'rbs/parser_aux') {
+            content = content.replace(parserRequirePattern, '');
+          }
           if (content) {
             vm.eval(content);
             vm.eval(`$LOADED_FEATURES << "${f}" unless $LOADED_FEATURES.include?("${f}")`);
