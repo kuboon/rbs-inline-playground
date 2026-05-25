@@ -10,6 +10,8 @@ GEM
     rbs-inline (0.14.0)
       prism (>= 0.29)
       rbs (~> 4.0)
+    ruby_wasm (2.9.4)
+      logger
     tsort (0.2.0)
 
 PLATFORMS
@@ -19,6 +21,7 @@ PLATFORMS
 DEPENDENCIES
   rbs (= 4.0.2)
   rbs-inline (= 0.14.0)
+  ruby_wasm (= 2.9.4)
 
 BUNDLED WITH
    2.4.19
