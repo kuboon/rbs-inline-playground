@@ -34,7 +34,7 @@ jobs:
         run: bundle exec ruby build_gem_bundle.rb
 
       - name: Build ruby.wasm
-        run: bundle exec rbwasm build --ruby-version head --output ruby.wasm --format wasm
+        run: bundle exec rbwasm build --ruby-version 3.4 --output ruby.wasm --format wasm
 
       - name: Clean build workspace
         run: rm -rf build rubies vendor/bundle .bundle
