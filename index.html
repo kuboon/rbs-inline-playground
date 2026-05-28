@@ -78,7 +78,8 @@
         }
       }
 
-      throw lastError ?? new Error('Failed to load @ruby/wasm-wasi module');
+      const triedUrls = RUBY_WASM_WASI_MODULE_URLS.join(', ');
+      throw lastError ?? new Error(`Failed to load @ruby/wasm-wasi module from: ${triedUrls}`);
     }
 
     const statusEl = document.getElementById('status');
