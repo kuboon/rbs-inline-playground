@@ -69,13 +69,13 @@
       for (const moduleUrl of RUBY_WASM_WASI_MODULE_URLS) {
         try {
           const mod = await import(moduleUrl);
-          if (typeof mod.DefaultRubyVM !== 'function') {
+          if (!mod.DefaultRubyVM) {
             throw new Error(`DefaultRubyVM export was not found in ${moduleUrl}`);
           }
           return mod.DefaultRubyVM;
         } catch (error) {
           lastError = error;
-          console.debug(`Failed to load module: ${moduleUrl}`, error);
+          console.warn(`Failed to load module: ${moduleUrl}`, error);
         }
       }
 
