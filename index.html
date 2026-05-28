@@ -57,7 +57,29 @@
 
   <script src="gem_bundle.js"></script>
   <script type="module">
-    import { DefaultRubyVM } from "https://cdn.jsdelivr.net/npm/@ruby/wasm-wasi@2.9.3-2.9.4/dist/browser/+esm";
+    const RUBY_WASM_WASI_MODULE_URLS = [
+      "https://cdn.jsdelivr.net/npm/@ruby/wasm-wasi@2.9.3-2.9.4/dist/browser/esm/index.js",
+      "https://cdn.jsdelivr.net/npm/@ruby/wasm-wasi@2.9.3-2.9.4/dist/browser/index.js",
+      "https://cdn.jsdelivr.net/npm/@ruby/wasm-wasi@2.9.3-2.9.4/dist/browser/+esm",
+    ];
+
+    async function loadDefaultRubyVM() {
+      let lastError = null;
+
+      for (const moduleUrl of RUBY_WASM_WASI_MODULE_URLS) {
+        try {
+          const mod = await import(moduleUrl);
+          if (typeof mod.DefaultRubyVM !== 'function') {
+            throw new Error(`DefaultRubyVM export was not found in ${moduleUrl}`);
+          }
+          return mod.DefaultRubyVM;
+        } catch (error) {
+          lastError = error;
+        }
+      }
+
+      throw lastError ?? new Error('Failed to load @ruby/wasm-wasi module');
+    }
 
     const statusEl = document.getElementById('status');
     const loadingEl = document.getElementById('loading');
@@ -110,6 +132,7 @@ end
         }
         const module = await WebAssembly.compileStreaming(response);
         setProgress('Initializing Ruby VM...');
+        const DefaultRubyVM = await loadDefaultRubyVM();
         const { vm } = await DefaultRubyVM(module);
 
         setProgress('Loading bundled gems...');
