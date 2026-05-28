@@ -75,6 +75,7 @@
           return mod.DefaultRubyVM;
         } catch (error) {
           lastError = error;
+          console.debug(`Failed to load module: ${moduleUrl}`, error);
         }
       }
 
